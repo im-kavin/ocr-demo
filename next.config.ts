@@ -1,7 +1,12 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  /* config options here */
+	webpack: (config) => {
+		config.externals.push({
+			sharp: 'commonjs sharp',
+		});
+		return config;
+	},
 };
 
 export default nextConfig;
