@@ -1,5 +1,6 @@
 'use client';
 
+import { preprocessImage } from '@/actions/preprocess-image';
 import { processDocument } from '@/actions/process-documents';
 import { Button } from '@/components/ui/button';
 import {
@@ -17,7 +18,6 @@ import { Cloud, File, X } from 'lucide-react';
 import { useCallback, useRef, useState } from 'react';
 import type { FC } from 'react';
 import { useForm } from 'react-hook-form';
-import sharp from 'sharp';
 
 interface ProcessedFile {
 	file: File;
@@ -42,45 +42,64 @@ const ACCEPTED_FILE_TYPES = [
 	'image/jpg',
 ];
 
-// Add FileConstructor type
-type FileConstructor = {
-	new (fileBits: BlobPart[], filename: string, options?: FilePropertyBag): File;
-};
-
-// Add type assertion for File constructor
-const FileWithConstructor = File as unknown as FileConstructor;
-
+// Fix formatFileSize utility function
 const formatFileSize = (bytes: number): string => {
 	if (bytes === 0) return '0 Bytes';
 	const k = 1024;
-	const sizes = ['Bytes', 'KB', 'MB'];
+	const sizes = ['Bytes', 'KB', 'MB', 'GB'];
 	const i = Math.floor(Math.log(bytes) / Math.log(k));
-	return `${Number.parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
+	return `${Number((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
 };
 
-const preprocessImage = async (file: File): Promise<File | undefined> => {
+// Update the File constructor type with proper type declaration
+const createProcessedFile = (
+	blob: Blob,
+	filename: string,
+	type: string,
+): File => {
 	try {
-		// Only process image files
+		// Create a new File object with proper type casting
+		const fileArray = [blob];
+		const fileOptions = { type };
+		const file = new (
+			File as unknown as new (
+				fileBits: BlobPart[],
+				fileName: string,
+				options?: FilePropertyBag,
+			) => File
+		)(fileArray, filename, fileOptions);
+		return file;
+	} catch (error) {
+		// Fallback for browsers that don't support the File constructor
+		const file = blob as unknown as File;
+		Object.defineProperty(file, 'name', {
+			writable: true,
+			value: filename,
+		});
+		Object.defineProperty(file, 'lastModified', {
+			writable: true,
+			value: new Date().getTime(),
+		});
+		return file;
+	}
+};
+
+const preprocessImageFile = async (file: File): Promise<File | undefined> => {
+	try {
 		if (!file.type.startsWith('image/')) {
 			return undefined;
 		}
 
 		const buffer = await file.arrayBuffer();
-		const sharpImage = sharp(Buffer.from(buffer));
+		const processedBuffer = await preprocessImage(buffer);
 
-		// Optimize image for OCR
-		const processedBuffer = await sharpImage
-			.grayscale() // Convert to grayscale
-			.normalize() // Normalize contrast
-			.sharpen() // Enhance edges
-			.threshold(128) // Binary threshold for better text separation
-			.toBuffer();
+		if (!processedBuffer) {
+			return undefined;
+		}
 
 		// Create new file from processed buffer
 		const blob = new Blob([processedBuffer], { type: file.type });
-		return new FileWithConstructor([blob], `processed-${file.name}`, {
-			type: file.type,
-		});
+		return createProcessedFile(blob, `processed-${file.name}`, file.type);
 	} catch (error) {
 		console.error('Error preprocessing image:', error);
 		return undefined;
@@ -223,7 +242,7 @@ export const FileUpload: FC = () => {
 							})
 							.map(async (file) => {
 								const preprocessedFile = file.type.startsWith('image/')
-									? await preprocessImage(file)
+									? await preprocessImageFile(file)
 									: undefined;
 
 								const fileInfo: FileInfo = {
